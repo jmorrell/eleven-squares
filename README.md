@@ -7,7 +7,24 @@ RGB channel split and colour streaks over the packing.
 
 ![preview](design/eleven-squares-preview.png)
 
-## Files
+## Round 2 concepts
+
+Clean packing; the glitch lives in the space and type around it.
+`python3 scripts/concepts.py [seed]` writes `design/concepts/`.
+
+![concepts](design/concepts/contact-sheet.png)
+
+| concept | idea |
+| --- | --- |
+| `a-signal` | the packing is the clean signal; noise leaks out sideways along its edges |
+| `b-search` | glitchy ghosts of rejected arrangements behind the one that won |
+| `c-smear` | pixel-sort smear: each square drags its colour off to the left |
+| `d-stack` | "Optimal" degrading line by line like worn tape; packing as a small seal |
+
+Each SVG has a full-bleed `#shirt` background rect for previewing; delete it
+when printing on a black garment.
+
+## Round 1 files
 
 | file | what |
 | --- | --- |
