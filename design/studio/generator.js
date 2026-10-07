@@ -62,9 +62,10 @@
     outline: true,
     outlineColor: "#ece6d8",
     outlineWidth: 3,
-    ghostsThroughGaps: true,
 
     ghostCount: 34,
+    ghostsInside: true,            // false: ghosts only appear outside the container
+    ghostClearance: 0,             // extra space kept clear around the container (px)
     ghostWhich: "all",             // all | tilted | axis
     ghostScaleBias: 1,             // >1 favours small boxes, <1 favours large
     ghostScaleMin: 1.0,
@@ -227,6 +228,7 @@
     if (params && params.seed != null) {
       for (const k of ["seedGhosts", "seedSlices", "seedShade", "seedGrain"]) if (params[k] == null) p[k] = params.seed;
     }
+    if (params && params.ghostsThroughGaps === false && params.ghostsInside == null) p.ghostsInside = false;  // old name
     const forExport = !!(opts && opts.forExport);
     const out = [];
     const add = (s) => out.push(s);
@@ -238,6 +240,15 @@
     add(`<title>${esc(p.headText)} — s(11) = 3.87708359…</title>`);
     if (forExport) add(`<metadata id="params">${esc(JSON.stringify(p))}</metadata>`);
     if (!forExport || p.exportBackground) add(`<rect id="shirt" width="${W}" height="${H}" fill="${p.bg}"/>`);
+
+    // ghosts + their slips, optionally clipped to the area outside the container
+    const clipOut = !p.ghostsInside;
+    if (clipOut) {
+      const c = p.ghostClearance, bx = X - c, by = Y - c, bw = A + 2 * c;
+      add(`<clipPath id="sq-outside"><path clip-rule="evenodd" d="M-${W},-${H}H${2 * W}V${2 * H}H-${W}Z` +
+          `M${f2(bx)},${f2(by)}V${f2(by + bw)}H${f2(bx + bw)}V${f2(by)}Z"/></clipPath>`);
+      add(`<g clip-path="url(#sq-outside)">`);
+    }
 
     // ghosts: rejected arrangements, each in the (larger) box it would need
     add(`<g id="sq-ghosts" fill="none" stroke-linejoin="round">`);
@@ -275,8 +286,9 @@
       }
     }
 
+    if (clipOut) add(`</g>`);
+
     // the packing, clean
-    if (!p.ghostsThroughGaps) add(`<rect x="${f2(X)}" y="${f2(Y)}" width="${A}" height="${A}" fill="${p.bg}"/>`);
     const rs = stream(p.seedShade, 3);
     PACKING.squares.forEach((q, i) => {
       const tilted = i < PACKING.tilted;

@@ -223,10 +223,11 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
       ["axisFill", "Straight squares", "color"], ["axisShade", "Straight shade variation", "range", 0, 0.6, 0.01],
       ["gap", "Gap / line width", "range", 0, 12, 0.5],
       ["outline", "Container outline", "toggle"], ["outlineColor", "Outline colour", "color"],
-      ["outlineWidth", "Outline width", "range", 0.5, 14, 0.5],
-      ["ghostsThroughGaps", "Ghosts show through gaps", "toggle"]] },
+      ["outlineWidth", "Outline width", "range", 0.5, 14, 0.5]]] },
     { title: "Ghosts", open: true, hint: "The rejected arrangements: perturbed copies of the packing, each in the bigger box it would need.", items: [
       ["ghostCount", "Count", "range", 0, 200, 1],
+      ["ghostsInside", "Show ghosts inside the box", "toggle"],
+      ["ghostClearance", "Clearance around box (when hidden inside)", "range", -100, 300, 1],
       ["ghostWhich", "Which squares", "select", [["all", "All"], ["tilted", "Tilted only"], ["axis", "Straight only"]]],
       ["ghostScaleMin", "Box scale min", "range", 0.6, 2, 0.01], ["ghostScaleMax", "Box scale max", "range", 0.6, 2.5, 0.01],
       ["ghostScaleBias", "Scale bias (>1 = tighter)", "range", 0.1, 6, 0.05],

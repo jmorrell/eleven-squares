@@ -243,9 +243,10 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
     outline: true,
     outlineColor: "#ece6d8",
     outlineWidth: 3,
-    ghostsThroughGaps: true,
 
     ghostCount: 34,
+    ghostsInside: true,            // false: ghosts only appear outside the container
+    ghostClearance: 0,             // extra space kept clear around the container (px)
     ghostWhich: "all",             // all | tilted | axis
     ghostScaleBias: 1,             // >1 favours small boxes, <1 favours large
     ghostScaleMin: 1.0,
@@ -408,6 +409,7 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
     if (params && params.seed != null) {
       for (const k of ["seedGhosts", "seedSlices", "seedShade", "seedGrain"]) if (params[k] == null) p[k] = params.seed;
     }
+    if (params && params.ghostsThroughGaps === false && params.ghostsInside == null) p.ghostsInside = false;  // old name
     const forExport = !!(opts && opts.forExport);
     const out = [];
     const add = (s) => out.push(s);
@@ -419,6 +421,15 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
     add(`<title>${esc(p.headText)} — s(11) = 3.87708359…</title>`);
     if (forExport) add(`<metadata id="params">${esc(JSON.stringify(p))}</metadata>`);
     if (!forExport || p.exportBackground) add(`<rect id="shirt" width="${W}" height="${H}" fill="${p.bg}"/>`);
+
+    // ghosts + their slips, optionally clipped to the area outside the container
+    const clipOut = !p.ghostsInside;
+    if (clipOut) {
+      const c = p.ghostClearance, bx = X - c, by = Y - c, bw = A + 2 * c;
+      add(`<clipPath id="sq-outside"><path clip-rule="evenodd" d="M-${W},-${H}H${2 * W}V${2 * H}H-${W}Z` +
+          `M${f2(bx)},${f2(by)}V${f2(by + bw)}H${f2(bx + bw)}V${f2(by)}Z"/></clipPath>`);
+      add(`<g clip-path="url(#sq-outside)">`);
+    }
 
     // ghosts: rejected arrangements, each in the (larger) box it would need
     add(`<g id="sq-ghosts" fill="none" stroke-linejoin="round">`);
@@ -456,8 +467,9 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
       }
     }
 
+    if (clipOut) add(`</g>`);
+
     // the packing, clean
-    if (!p.ghostsThroughGaps) add(`<rect x="${f2(X)}" y="${f2(Y)}" width="${A}" height="${A}" fill="${p.bg}"/>`);
     const rs = stream(p.seedShade, 3);
     PACKING.squares.forEach((q, i) => {
       const tilted = i < PACKING.tilted;
@@ -564,10 +576,11 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
       ["axisFill", "Straight squares", "color"], ["axisShade", "Straight shade variation", "range", 0, 0.6, 0.01],
       ["gap", "Gap / line width", "range", 0, 12, 0.5],
       ["outline", "Container outline", "toggle"], ["outlineColor", "Outline colour", "color"],
-      ["outlineWidth", "Outline width", "range", 0.5, 14, 0.5],
-      ["ghostsThroughGaps", "Ghosts show through gaps", "toggle"]] },
+      ["outlineWidth", "Outline width", "range", 0.5, 14, 0.5]]] },
     { title: "Ghosts", open: true, hint: "The rejected arrangements: perturbed copies of the packing, each in the bigger box it would need.", items: [
       ["ghostCount", "Count", "range", 0, 200, 1],
+      ["ghostsInside", "Show ghosts inside the box", "toggle"],
+      ["ghostClearance", "Clearance around box (when hidden inside)", "range", -100, 300, 1],
       ["ghostWhich", "Which squares", "select", [["all", "All"], ["tilted", "Tilted only"], ["axis", "Straight only"]]],
       ["ghostScaleMin", "Box scale min", "range", 0.6, 2, 0.01], ["ghostScaleMax", "Box scale max", "range", 0.6, 2.5, 0.01],
       ["ghostScaleBias", "Scale bias (>1 = tighter)", "range", 0.1, 6, 0.05],
