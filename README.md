@@ -7,6 +7,19 @@ RGB channel split and colour streaks over the packing.
 
 ![preview](design/eleven-squares-preview.png)
 
+## Studio (round 3)
+
+`design/studio/` is a browser editor for the "search space" direction: every
+parameter as a control, a seed scrubber with thumbnails, typefaces, colour
+pickers, and export of a fully outlined SVG or the parameter JSON.
+
+- `generator.js` is the single source of truth, shared by the page and by
+  `node scripts/render_params.js params.json out.svg` (needs `npm i opentype.js@1.3.4`).
+- `index.src.html` is the page source; `python3 scripts/build_studio.py` inlines
+  opentype.js and the generator into `index.html`, which is what gets published.
+- `fonts/` are Latin subsets of open-licence faces from Fontsource, plus a
+  DejaVu Sans Mono subset used as a fallback for ∀, ≥ and other maths glyphs.
+
 ## Round 2 concepts
 
 Clean packing; the glitch lives in the space and type around it.

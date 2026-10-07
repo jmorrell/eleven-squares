@@ -1,0 +1,531 @@
+<title>s(11) Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: editor — sticky stage (preview + seed strip) left, scrolling control rail right; stacks on phones.
+   Deliberately single dark theme: it's a workbench for a print that lives on a black shirt. */
+:root {
+  --ground: #070708;
+  --panel: #101113;
+  --raise: #17191c;
+  --line: #25282d;
+  --fg: #e9e5db;
+  --muted: #8b8f96;
+  --accent: #00e5ff;
+  --hot: #ff2d55;
+  --ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { background: var(--ground); color: var(--fg); font: 14px/1.45 var(--ui); }
+button, input, select, textarea { font: inherit; color: inherit; }
+button {
+  background: var(--raise); border: 1px solid var(--line); border-radius: 4px;
+  padding: 6px 10px; cursor: pointer; white-space: nowrap;
+}
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--fg); color: var(--ground); border-color: var(--fg); font-weight: 600; }
+button:disabled { opacity: .45; cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.brand { font: 500 15px var(--mono); letter-spacing: .02em; }
+.brand b { color: var(--accent); font-weight: 500; }
+.looks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.looks span, .label { font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+
+main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: calc(100% - 53px); }
+.stage { padding: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.preview-wrap { position: sticky; top: env(safe-area-inset-top, 0px); display: flex; flex-direction: column; gap: 14px; }
+#preview {
+  aspect-ratio: 3 / 4; height: min(calc(100vh - 260px), 1100px); min-height: 360px; max-width: 100%;
+  margin: 0 auto; border: 1px solid var(--line); position: relative;
+}
+#preview svg { width: 100%; height: 100%; display: block; }
+#loading {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font: 12px var(--mono); color: var(--muted); background: var(--ground);
+}
+
+.scrub { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.scrub input[type=range] { flex: 1 1 200px; min-width: 0; }
+.scrub input[type=number] { width: 84px; flex: none; }
+.scrub select { width: auto; flex: none; }
+.strip { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
+.thumb {
+  padding: 0; border: 1px solid var(--line); border-radius: 2px; aspect-ratio: 3/4; overflow: hidden;
+  background: var(--ground); position: relative;
+}
+.thumb svg { width: 100%; height: 100%; display: block; pointer-events: none; }
+.thumb i {
+  position: absolute; left: 3px; bottom: 2px; font: 10px var(--mono); font-style: normal;
+  color: var(--fg); background: rgba(0,0,0,.6); padding: 0 3px;
+}
+.thumb[aria-current="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+aside {
+  border-left: 1px solid var(--line); background: var(--panel);
+  height: calc(100vh - 53px); overflow-y: auto; position: sticky; top: 0;
+}
+details { border-bottom: 1px solid var(--line); }
+summary {
+  padding: 11px 16px; cursor: pointer; list-style: none; display: flex; justify-content: space-between;
+  font: 500 12px var(--mono); text-transform: uppercase; letter-spacing: .08em;
+}
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; color: var(--muted); }
+details[open] summary::after { content: "−"; }
+.group { padding: 2px 16px 14px; display: grid; gap: 10px; }
+.ctl { display: grid; gap: 3px; }
+.ctl-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ctl-head label { color: var(--fg); font-size: 13px; }
+.ctl-head input[type=number] {
+  width: 74px; text-align: right; background: transparent; border: 1px solid transparent;
+  border-radius: 3px; padding: 1px 4px; font: 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--muted);
+}
+.ctl-head input[type=number]:hover, .ctl-head input[type=number]:focus { border-color: var(--line); color: var(--fg); }
+input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
+input[type=text], select, textarea, .scrub input[type=number], .scrub select {
+  background: var(--raise); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px;
+}
+input[type=text], select, textarea { width: 100%; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 3px; background: none; }
+.hex { font: 12px var(--mono); color: var(--muted); }
+.toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
+.hint { font-size: 12px; color: var(--muted); }
+
+.palette { display: flex; flex-wrap: wrap; gap: 6px; }
+.swatch { position: relative; }
+.swatch input[type=color] { width: 34px; height: 34px; }
+.swatch button {
+  position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; padding: 0; border-radius: 50%;
+  font-size: 10px; line-height: 14px; display: none;
+}
+.swatch:hover button, .swatch:focus-within button { display: block; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button { font-size: 12px; padding: 4px 8px; }
+
+.preset-list { display: grid; gap: 6px; }
+.preset { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--raise); border-radius: 4px; }
+.preset .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset .when { font: 11px var(--mono); color: var(--muted); }
+
+#toast {
+  position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  background: var(--fg); color: var(--ground); padding: 8px 14px; border-radius: 4px; font-weight: 500;
+  opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px);
+}
+#toast.show { opacity: 1; }
+
+@media (max-width: 900px) {
+  main { grid-template-columns: minmax(0, 1fr); }
+  aside { height: auto; position: static; border-left: 0; border-top: 1px solid var(--line); }
+  #preview { height: auto; width: 100%; min-height: 0; }
+  .preview-wrap { position: static; }
+  .strip { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .actions { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+</style>
+
+<header>
+  <div class="brand">s(11)<b>·</b>studio</div>
+  <div class="looks" id="looks"><span>Start from</span></div>
+  <div class="actions">
+    <button id="undo" title="Undo (Ctrl/⌘+Z)">Undo</button>
+    <button id="redo" title="Redo (Shift+Ctrl/⌘+Z)">Redo</button>
+    <button id="copyParams">Copy parameters</button>
+    <button id="saveSvg" class="primary">Save SVG</button>
+  </div>
+</header>
+
+<main>
+  <section class="stage">
+    <div class="preview-wrap">
+      <div id="preview" aria-label="Design preview"><div id="loading">Loading type…</div></div>
+      <div class="scrub">
+        <span class="label">Scrub</span>
+        <select id="scrubTarget">
+          <option value="all">all seeds</option>
+          <option value="seedGhosts">ghost seed</option>
+          <option value="seedSlices">slice seed</option>
+          <option value="seedShade">shading seed</option>
+          <option value="seedGrain">grain seed</option>
+        </select>
+        <button id="seedPrev" aria-label="Previous seed">‹</button>
+        <input type="range" id="seedRange" min="0" max="9999" step="1" aria-label="Seed">
+        <button id="seedNext" aria-label="Next seed">›</button>
+        <input type="number" id="seedNum" min="0" max="99999" aria-label="Seed value">
+        <button id="seedRandom">Random</button>
+      </div>
+      <div class="strip" id="strip" aria-label="Neighbouring seeds"></div>
+    </div>
+  </section>
+  <aside id="panel"></aside>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+/*OPENTYPE*/
+</script>
+<script>
+/*GENERATOR*/
+</script>
+<script>
+(function () {
+  "use strict";
+  const G = window.SquaresGen;
+  const D = G.DEFAULTS;
+  const SEEDS = ["seedGhosts", "seedSlices", "seedShade", "seedGrain"];
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  const $ = (id) => document.getElementById(id);
+
+  // ---------------------------------------------------------------- looks
+  const PALETTES = {
+    Tape: D.palette,
+    Ice: ["#00e5ff", "#2f6bff", "#9ad8ff", "#ffffff", "#5b7cff", "#00ffd0"],
+    Infrared: ["#ff2d55", "#ff7a00", "#ffd400", "#ff4fa3", "#ffffff", "#ff004c"],
+    Phosphor: ["#39ff88", "#b6ff3b", "#00e5ff", "#e8ffe0", "#00b36b"],
+    Bone: ["#ece6d8", "#b9b3a6", "#8b8f96", "#ffffff"],
+    CMY: ["#00e5ff", "#ff2bd6", "#ffe600", "#ffffff"],
+  };
+  const LOOKS = {
+    "Bone": {},
+    "Round 2": { tiltFill: "#d78fc2", axisFill: "#6a957f", axisShade: 0.12 },
+    "Signal": { tiltFill: "#00e5ff", tiltShade: 0.0, axisFill: "#1d2026", axisShade: 0.1, outlineColor: "#00e5ff",
+                palette: PALETTES.Ice, headFont: "unbounded-800", headSize: 130, splitA: "#2f6bff", splitB: "#ffffff" },
+    "Quiet": { ghostCount: 12, ghostOpacityMax: 0.45, sliceChance: 0.12, squareStyle: "outline", gap: 3,
+               axisFill: "#8b8f96", headFont: "instrument-serif", headSize: 220, splitAmount: 3, headSliceShift: 18 },
+    "Terminal": { tiltFill: "#39ff88", axisFill: "#173d28", palette: PALETTES.Phosphor, outlineColor: "#39ff88",
+                  headFont: "vt323", headSize: 260, headY: 1290, subFont: "vt323", subSize: 36, splitA: "#00e5ff", splitB: "#b6ff3b", headColor: "#e8ffe0" },
+  };
+
+  // ---------------------------------------------------------------- control schema
+  const fontOpts = Object.entries(G.FONTS).map(([v, f]) => [v, f.label]);
+  const GROUPS = [
+    { title: "Seeds", open: true, hint: "Each part has its own seed: lock one and scrub another with the strip.", items: [
+      ["seedGhosts", "Ghost seed", "range", 0, 9999, 1], ["seedSlices", "Slice seed", "range", 0, 9999, 1],
+      ["seedShade", "Shading seed", "range", 0, 9999, 1], ["seedGrain", "Grain seed", "range", 0, 9999, 1]] },
+    { title: "Packing", open: true, items: [
+      ["packSize", "Size", "range", 150, 1100, 1], ["packX", "Horizontal offset", "range", -500, 500, 1],
+      ["packY", "Top", "range", -200, 1400, 1],
+      ["squareStyle", "Square style", "select", [["solid", "Solid"], ["outline", "Outline"]]],
+      ["tiltFill", "Tilted squares", "color"], ["tiltShade", "Tilted shade variation", "range", 0, 0.6, 0.01],
+      ["axisFill", "Straight squares", "color"], ["axisShade", "Straight shade variation", "range", 0, 0.6, 0.01],
+      ["gap", "Gap / line width", "range", 0, 12, 0.5],
+      ["outline", "Container outline", "toggle"], ["outlineColor", "Outline colour", "color"],
+      ["outlineWidth", "Outline width", "range", 0.5, 14, 0.5],
+      ["ghostsThroughGaps", "Ghosts show through gaps", "toggle"]] },
+    { title: "Ghosts", open: true, hint: "The rejected arrangements: perturbed copies of the packing, each in the bigger box it would need.", items: [
+      ["ghostCount", "Count", "range", 0, 200, 1],
+      ["ghostWhich", "Which squares", "select", [["all", "All"], ["tilted", "Tilted only"], ["axis", "Straight only"]]],
+      ["ghostScaleMin", "Box scale min", "range", 0.6, 2, 0.01], ["ghostScaleMax", "Box scale max", "range", 0.6, 2.5, 0.01],
+      ["ghostScaleBias", "Scale bias (>1 = tighter)", "range", 0.1, 6, 0.05],
+      ["ghostAngle", "Tilt jitter (°)", "range", 0, 60, 0.5], ["ghostAxisAngle", "Straight jitter (°)", "range", 0, 60, 0.5],
+      ["ghostJitter", "Position jitter", "range", 0, 1.5, 0.01],
+      ["ghostStroke", "Line width", "range", 0.2, 8, 0.1], ["ghostStrokeVar", "Line width variation", "range", 0, 1, 0.01],
+      ["ghostOpacityMin", "Opacity min", "range", 0, 1, 0.01], ["ghostOpacityMax", "Opacity max", "range", 0, 1, 0.01],
+      ["ghostBoxChance", "Show their boxes", "range", 0, 1, 0.01],
+      ["ghostShiftChance", "Sideways shift chance", "range", 0, 1, 0.01], ["ghostShiftMax", "Sideways shift max", "range", 0, 400, 1],
+      ["ghostColorMode", "Colour", "select", [["palette", "From glitch palette"], ["single", "Single colour"]]],
+      ["ghostColor", "Single colour", "color"]] },
+    { title: "Tracking slips", hint: "Horizontal bands of the ghost layer knocked sideways. The packing stays clean.", items: [
+      ["sliceChance", "Chance per band", "range", 0, 1, 0.01], ["sliceShift", "Max shift", "range", 0, 400, 1],
+      ["sliceReach", "Reach beyond packing", "range", 0, 800, 1],
+      ["sliceHeightMin", "Band height min", "range", 1, 120, 1], ["sliceHeightMax", "Band height max", "range", 1, 200, 1],
+      ["sliceGapMin", "Gap between bands min", "range", 0, 200, 1], ["sliceGapMax", "Gap between bands max", "range", 0, 300, 1]] },
+    { title: "Glitch palette", custom: "palette" },
+    { title: "Headline", open: true, items: [
+      ["headText", "Text", "text"], ["headFont", "Typeface", "select", fontOpts],
+      ["headSize", "Size", "range", 30, 400, 1], ["headX", "Horizontal offset", "range", -500, 500, 1],
+      ["headY", "Baseline", "range", 100, 1600, 1], ["headTracking", "Letter spacing", "range", -30, 80, 0.5],
+      ["headColor", "Colour", "color"],
+      ["splitAmount", "RGB split", "range", 0, 40, 0.5], ["splitA", "Split colour left", "color"],
+      ["splitB", "Split colour right", "color"], ["splitOpacity", "Split opacity", "range", 0, 1, 0.01],
+      ["headSlicePos", "Slip position", "range", -0.3, 1.1, 0.01], ["headSliceHeight", "Slip height", "range", 0, 0.8, 0.01],
+      ["headSliceShift", "Slip shift", "range", -150, 150, 1],
+      ["headSlice2", "Second slip", "toggle"], ["headSlice2Pos", "Second slip position", "range", -0.3, 1.1, 0.01],
+      ["headSlice2Height", "Second slip height", "range", 0, 0.8, 0.01], ["headSlice2Shift", "Second slip shift", "range", -150, 150, 1]] },
+    { title: "Subline", items: [
+      ["subText", "Text", "text"], ["subFont", "Typeface", "select", fontOpts],
+      ["subSize", "Size", "range", 8, 120, 0.5], ["subX", "Horizontal offset", "range", -500, 500, 1],
+      ["subY", "Baseline", "range", 100, 1600, 1], ["subTracking", "Letter spacing", "range", -10, 40, 0.5],
+      ["subColor", "Colour", "color"], ["subOpacity", "Opacity", "range", 0, 1, 0.01]] },
+    { title: "Ground & grain", items: [
+      ["bg", "Shirt colour", "color"], ["ink", "Ink (grain)", "color"],
+      ["grainCount", "Grain specks", "range", 0, 4000, 10], ["grainSize", "Speck size", "range", 0.5, 8, 0.1],
+      ["grainOpacityMax", "Speck opacity max", "range", 0.05, 1, 0.01],
+      ["grainColourChance", "Coloured specks", "range", 0, 1, 0.01]] },
+    { title: "Export & presets", custom: "export" },
+  ];
+
+  // ---------------------------------------------------------------- state
+  let P = clone(D);
+  try { const s = JSON.parse(localStorage.getItem("s11-studio") || "null"); if (s) P = Object.assign(clone(D), s); } catch (e) {}
+  const undo = [], redo = [];
+  let lastCommitted = JSON.stringify(P);
+  function commit() {
+    const now = JSON.stringify(P);
+    if (now === lastCommitted) return;
+    undo.push(lastCommitted); if (undo.length > 200) undo.shift();
+    redo.length = 0; lastCommitted = now; updateUndo();
+    try { localStorage.setItem("s11-studio", now); } catch (e) {}
+  }
+  function restore(json) { P = Object.assign(clone(D), JSON.parse(json)); lastCommitted = json; syncControls(); schedule(); updateUndo();
+    try { localStorage.setItem("s11-studio", json); } catch (e) {} }
+  function updateUndo() { $("undo").disabled = !undo.length; $("redo").disabled = !redo.length; }
+  $("undo").onclick = () => { if (!undo.length) return; redo.push(JSON.stringify(P)); restore(undo.pop()); };
+  $("redo").onclick = () => { if (!redo.length) return; undo.push(JSON.stringify(P)); restore(redo.pop()); };
+  document.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
+    if (/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName) && document.activeElement.type === "text") return;
+    e.preventDefault(); (e.shiftKey ? $("redo") : $("undo")).click();
+  });
+
+  function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2200); }
+
+  // ---------------------------------------------------------------- fonts
+  const fontCache = {};
+  function loadFont(id, file) {
+    if (!fontCache[id]) fontCache[id] = fetch("fonts/" + file).then((r) => { if (!r.ok) throw new Error(file); return r.arrayBuffer(); })
+      .then((b) => opentype.parse(b));
+    return fontCache[id];
+  }
+  const fonts = {};
+  async function ensureFonts() {
+    const ids = new Set([P.headFont, P.subFont, D.headFont]);
+    const jobs = [loadFont(G.FALLBACK_FONT.id, G.FALLBACK_FONT.file).then((f) => (fonts[G.FALLBACK_FONT.id] = f))];
+    for (const id of ids) if (G.FONTS[id]) jobs.push(loadFont(id, G.FONTS[id].file).then((f) => (fonts[id] = f)));
+    await Promise.all(jobs);
+  }
+
+  // ---------------------------------------------------------------- render
+  let raf = 0, thumbTimer = 0, ready = false;
+  function schedule() {
+    if (raf) return;
+    raf = requestAnimationFrame(async () => {
+      raf = 0;
+      try { await ensureFonts(); } catch (e) { $("loading").textContent = "Couldn't load a typeface. Reload the page to try again."; return; }
+      ready = true;
+      $("preview").innerHTML = G.generate(P, fonts);
+      syncScrub();
+      clearTimeout(thumbTimer); thumbTimer = setTimeout(renderStrip, 220);
+    });
+  }
+
+  // ---------------------------------------------------------------- seed scrub
+  const target = () => $("scrubTarget").value;
+  const curSeed = () => (target() === "all" ? P.seedGhosts : P[target()]);
+  function withSeed(base, v) {
+    const q = Object.assign({}, base);
+    if (target() === "all") SEEDS.forEach((k) => (q[k] = v)); else q[target()] = v;
+    return q;
+  }
+  function setSeed(v) {
+    v = Math.max(0, Math.min(99999, Math.round(v) || 0));
+    P = withSeed(P, v); syncControls(); schedule(); commit();
+  }
+  function syncScrub() { $("seedRange").value = Math.min(curSeed(), 9999); $("seedNum").value = curSeed(); }
+  $("seedRange").addEventListener("input", (e) => { P = withSeed(P, +e.target.value); syncControls(); schedule(); });
+  $("seedRange").addEventListener("change", commit);
+  $("seedNum").addEventListener("change", (e) => setSeed(+e.target.value));
+  $("seedPrev").onclick = () => setSeed(curSeed() - 1);
+  $("seedNext").onclick = () => setSeed(curSeed() + 1);
+  $("seedRandom").onclick = () => setSeed(Math.floor(Math.random() * 10000));
+  $("scrubTarget").onchange = () => { syncScrub(); renderStrip(); };
+
+  function renderStrip() {
+    if (!ready) return;
+    const strip = $("strip"), s0 = curSeed();
+    const n = getComputedStyle(strip).gridTemplateColumns.split(" ").length || 12;
+    const start = Math.max(0, s0 - Math.floor(n / 2));
+    strip.innerHTML = "";
+    for (let i = 0; i < n; i++) {
+      const v = start + i, b = document.createElement("button");
+      b.className = "thumb"; b.setAttribute("aria-label", "Seed " + v);
+      if (v === s0) b.setAttribute("aria-current", "true");
+      b.innerHTML = G.generate(withSeed(P, v), fonts) + "<i>" + v + "</i>";
+      b.onclick = () => setSeed(v);
+      strip.appendChild(b);
+    }
+  }
+
+  // ---------------------------------------------------------------- controls
+  const bound = [];
+  function el(tag, attrs, kids) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (k === "text") e.textContent = v; else if (k.startsWith("on")) e[k] = v; else e.setAttribute(k, v);
+    }
+    (kids || []).forEach((c) => c && e.appendChild(c));
+    return e;
+  }
+  function control([key, label, type, a, b, step]) {
+    const id = "c-" + key;
+    const set = (v) => { P[key] = v; schedule(); };
+    if (type === "range") {
+      const num = el("input", { type: "number", id: id + "-n", min: a, max: b, step, "aria-label": label + " value" });
+      const rng = el("input", { type: "range", id, min: a, max: b, step });
+      rng.oninput = () => { num.value = rng.value; set(+rng.value); };
+      rng.onchange = commit;
+      num.onchange = () => { rng.value = num.value; set(+num.value); commit(); };
+      bound.push(() => { rng.value = P[key]; num.value = P[key]; });
+      return el("div", { class: "ctl" }, [el("div", { class: "ctl-head" }, [el("label", { for: id, text: label }), num]), rng]);
+    }
+    if (type === "color") {
+      const inp = el("input", { type: "color", id }), hex = el("span", { class: "hex" });
+      inp.oninput = () => { hex.textContent = inp.value; set(inp.value); };
+      inp.onchange = commit;
+      bound.push(() => { inp.value = P[key]; hex.textContent = P[key]; });
+      return el("div", { class: "row" }, [el("label", { for: id, text: label }), el("div", { class: "row" }, [hex, inp])]);
+    }
+    if (type === "toggle") {
+      const inp = el("input", { type: "checkbox", id });
+      inp.onchange = () => { set(inp.checked); commit(); };
+      bound.push(() => { inp.checked = !!P[key]; });
+      return el("label", { class: "toggle", for: id }, [inp, el("span", { text: label })]);
+    }
+    if (type === "select") {
+      const sel = el("select", { id });
+      a.forEach(([v, t]) => sel.appendChild(el("option", { value: v, text: t })));
+      sel.onchange = () => { set(sel.value); commit(); };
+      bound.push(() => { sel.value = P[key]; });
+      return el("div", { class: "ctl" }, [el("label", { for: id, text: label }), sel]);
+    }
+    const inp = el("input", { type: "text", id, spellcheck: "false" });
+    inp.oninput = () => set(inp.value);
+    inp.onchange = commit;
+    bound.push(() => { if (document.activeElement !== inp) inp.value = P[key]; });
+    return el("div", { class: "ctl" }, [el("label", { for: id, text: label }), inp]);
+  }
+
+  function paletteGroup() {
+    const wrap = el("div", { class: "palette", id: "palette" });
+    const chips = el("div", { class: "chips" });
+    Object.entries(PALETTES).forEach(([name, cols]) =>
+      chips.appendChild(el("button", { text: name, onclick: () => { P.palette = cols.slice(); syncControls(); schedule(); commit(); } })));
+    const draw = () => {
+      wrap.innerHTML = "";
+      P.palette.forEach((c, i) => {
+        const inp = el("input", { type: "color", value: c, "aria-label": "Glitch colour " + (i + 1), id: "pal-" + i });
+        inp.oninput = () => { P.palette[i] = inp.value; schedule(); };
+        inp.onchange = commit;
+        const rm = el("button", { text: "×", "aria-label": "Remove colour " + (i + 1),
+          onclick: () => { if (P.palette.length > 1) { P.palette.splice(i, 1); draw(); schedule(); commit(); } } });
+        wrap.appendChild(el("div", { class: "swatch" }, [inp, rm]));
+      });
+      wrap.appendChild(el("button", { text: "+", "aria-label": "Add colour",
+        onclick: () => { P.palette.push("#ffffff"); draw(); schedule(); commit(); } }));
+    };
+    bound.push(draw);
+    return [el("p", { class: "hint", text: "Colours for the ghosts and coloured grain. Hover a swatch to remove it." }), chips, wrap];
+  }
+
+  let db = null, downloads = null;
+  function exportGroup() {
+    const bgT = control(["exportBackground", "Include shirt colour in SVG", "toggle"]);
+    const ta = el("textarea", { id: "paramsIn", rows: "4", placeholder: "Paste parameters JSON here", spellcheck: "false" });
+    const apply = el("button", { text: "Apply pasted parameters", onclick: () => {
+      try { P = Object.assign(clone(D), JSON.parse(ta.value)); syncControls(); schedule(); commit(); toast("Parameters applied"); ta.value = ""; }
+      catch (e) { toast("That isn't valid JSON. Copy it again from the studio and paste the whole thing."); }
+    } });
+    const name = el("input", { type: "text", id: "presetName", placeholder: "Preset name, e.g. quiet bone v3" });
+    const save = el("button", { text: "Save preset", id: "savePreset" });
+    const list = el("div", { class: "preset-list", id: "presetList" });
+    const presetBox = el("div", { class: "group", style: "padding:0", id: "presetBox" }, [
+      el("p", { class: "hint", text: "Saved presets live with this page, so Claude can read them and render them in the repo." }),
+      el("div", { class: "row" }, [name, save]), list]);
+    presetBox.hidden = true;
+    save.onclick = async () => {
+      if (!db) return;
+      const n = name.value.trim() || "Preset " + new Date().toLocaleString();
+      save.disabled = true;
+      try { await db.collection("presets").add({ name: n, params: clone(P), savedAt: new Date().toISOString() }); name.value = ""; toast("Saved “" + n + "”"); }
+      catch (e) { toast("Couldn't save the preset (" + (e && e.code || "error") + ")."); }
+      save.disabled = false;
+    };
+    return [bgT, el("div", { class: "ctl" }, [el("label", { for: "paramsIn", text: "Load parameters" }), ta]), apply, presetBox];
+  }
+
+  function buildPanel() {
+    const panel = $("panel");
+    GROUPS.forEach((g) => {
+      const body = el("div", { class: "group" });
+      if (g.hint) body.appendChild(el("p", { class: "hint", text: g.hint }));
+      const kids = g.custom === "palette" ? paletteGroup() : g.custom === "export" ? exportGroup() : g.items.map(control);
+      kids.forEach((k) => body.appendChild(k));
+      const d = el("details", {}, [el("summary", { text: g.title }), body]);
+      if (g.open) d.open = true;
+      panel.appendChild(d);
+    });
+    const looks = $("looks");
+    Object.entries(LOOKS).forEach(([name, over]) => looks.appendChild(el("button", { text: name, onclick: () => {
+      P = Object.assign(clone(D), clone(over)); syncControls(); schedule(); commit(); toast("Started from " + name);
+    } })));
+  }
+  function syncControls() { bound.forEach((f) => f()); syncScrub(); }
+
+  // ---------------------------------------------------------------- export
+  function exportSvg() { return G.generate(P, fonts, { forExport: true }); }
+  $("saveSvg").onclick = async () => {
+    if (!ready) return;
+    const svg = exportSvg();
+    if (downloads) {
+      try { await downloads.save({ filename: "eleven-squares.svg", data: svg }); toast("SVG saved"); }
+      catch (e) { if (e && e.code !== "declined") toast("Couldn't save the file (" + (e.code || "error") + "). Copy parameters instead."); }
+    } else {
+      try { await navigator.clipboard.writeText(svg); toast("Saving files isn't available here, so the SVG was copied to your clipboard"); }
+      catch (e) { toast("Saving isn't available here. Use Copy parameters instead."); }
+    }
+  };
+  $("copyParams").onclick = async () => {
+    const json = JSON.stringify(P, null, 2);
+    try { await navigator.clipboard.writeText(json); toast("Parameters copied"); }
+    catch (e) { const ta = $("paramsIn"); ta.value = json; ta.closest("details").open = true; ta.focus(); ta.select(); toast("Copy blocked: the parameters are selected in the Load box"); }
+  };
+
+  // ---------------------------------------------------------------- capabilities
+  async function wireCapabilities() {
+    if (!window.claude || !window.claude.use) return;
+    try { downloads = await window.claude.use("downloads"); } catch (e) { downloads = null; }
+    try { db = await window.claude.use("db"); } catch (e) { db = null; }
+    if (!db) return;
+    $("presetBox").hidden = false;
+    const list = $("presetList");
+    db.collection("presets").orderBy("savedAt", "desc").onSnapshot((snap) => {
+      list.innerHTML = "";
+      if (snap.empty) { list.appendChild(el("p", { class: "hint", text: "No presets yet. Name the current settings above and save them." })); return; }
+      snap.docs.forEach((d) => {
+        const v = d.data() || {};
+        const when = v.savedAt ? new Date(v.savedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+        list.appendChild(el("div", { class: "preset" }, [
+          el("span", { class: "name", text: v.name || d.id, title: v.name || d.id }), el("span", { class: "when", text: when }),
+          el("button", { text: "Load", onclick: () => { P = Object.assign(clone(D), v.params || {}); syncControls(); schedule(); commit(); toast("Loaded “" + (v.name || d.id) + "”"); } }),
+          el("button", { text: "Delete", "aria-label": "Delete " + (v.name || d.id), onclick: async (ev) => {
+            const btn = ev.currentTarget;
+            if (btn.dataset.armed !== "1") { btn.dataset.armed = "1"; btn.textContent = "Confirm"; setTimeout(() => { btn.dataset.armed = ""; btn.textContent = "Delete"; }, 2500); return; }
+            try { await db.collection("presets").doc(d.id).delete(); toast("Deleted"); }
+            catch (e) { toast("Couldn't delete it (" + (e && e.code || "error") + ")."); }
+          } }),
+        ]));
+      });
+    }, () => { list.innerHTML = ""; list.appendChild(el("p", { class: "hint", text: "Presets couldn't be loaded right now." })); });
+  }
+
+  buildPanel();
+  syncControls();
+  updateUndo();
+  schedule();
+  wireCapabilities();
+  window.addEventListener("resize", () => { clearTimeout(thumbTimer); thumbTimer = setTimeout(renderStrip, 200); });
+})();
+</script>
