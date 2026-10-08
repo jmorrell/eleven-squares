@@ -14,6 +14,9 @@
   --muted: #8b8f96;
   --accent: #00e5ff;
   --hot: #ff2d55;
+  --ok: #4fd18b;
+  --warn: #f2b33d;
+  --bad: #ff5a5a;
   --ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
   color-scheme: dark;
@@ -119,6 +122,18 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
 .preset .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preset .when { font: 11px var(--mono); color: var(--muted); }
 
+.check { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.check .label { margin-right: 4px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line);
+  border-radius: 999px; font: 12px var(--mono); font-variant-numeric: tabular-nums; background: var(--raise);
+}
+.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.chip[data-s="ok"]::before { background: var(--ok); }
+.chip[data-s="warn"]::before { background: var(--warn); }
+.chip[data-s="bad"]::before { background: var(--bad); }
+.chip[data-s="warn"] { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.chip[data-s="bad"] { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
 #toast {
   position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
   background: var(--fg); color: var(--ground); padding: 8px 14px; border-radius: 4px; font-weight: 500;
@@ -144,6 +159,7 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
     <button id="undo" title="Undo (Ctrl/⌘+Z)">Undo</button>
     <button id="redo" title="Redo (Shift+Ctrl/⌘+Z)">Redo</button>
     <button id="copyParams">Copy parameters</button>
+    <button id="savePng">Save PNG</button>
     <button id="saveSvg" class="primary">Save SVG</button>
   </div>
 </header>
@@ -167,6 +183,7 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
         <input type="number" id="seedNum" min="0" max="99999" aria-label="Seed value">
         <button id="seedRandom">Random</button>
       </div>
+      <div class="check" id="check" aria-label="Print check"></div>
       <div class="strip" id="strip" aria-label="Neighbouring seeds"></div>
     </div>
   </section>
@@ -212,6 +229,12 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
   // ---------------------------------------------------------------- control schema
   const fontOpts = Object.entries(G.FONTS).map(([v, f]) => [v, f.label]);
   const GROUPS = [
+    { title: "Print", open: true, hint: "Print-safe flattens see-through colours into the solid colour they look like on the shirt, and enforces the minimums below in both preview and export. 1 unit = 0.25 mm. Save PNG gives 3600 × 4800 px (12 × 16 in at 300 dpi), transparent unless the shirt colour is included.", items: [
+      ["printSafe", "Print-safe", "toggle"],
+      ["minLine", "Minimum line width", "range", 1, 10, 0.1],
+      ["minGap", "Minimum gap between squares", "range", 1, 12, 0.1],
+      ["minSpeck", "Minimum grain speck", "range", 1, 12, 0.1],
+      ["exportBackground", "Include shirt colour in exports", "toggle"]] },
     { title: "Seeds", open: true, hint: "Each part has its own seed: lock one and scrub another with the strip.", items: [
       ["seedGhosts", "Ghost seed", "range", 0, 9999, 1], ["seedSlices", "Slice seed", "range", 0, 9999, 1],
       ["seedShade", "Shading seed", "range", 0, 9999, 1], ["seedGrain", "Grain seed", "range", 0, 9999, 1]] },
@@ -223,7 +246,7 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
       ["axisFill", "Straight squares", "color"], ["axisShade", "Straight shade variation", "range", 0, 0.6, 0.01],
       ["gap", "Gap / line width", "range", 0, 12, 0.5],
       ["outline", "Container outline", "toggle"], ["outlineColor", "Outline colour", "color"],
-      ["outlineWidth", "Outline width", "range", 0.5, 14, 0.5]]] },
+      ["outlineWidth", "Outline width", "range", 0.5, 14, 0.5]] },
     { title: "Ghosts", open: true, hint: "The rejected arrangements: perturbed copies of the packing, each in the bigger box it would need.", items: [
       ["ghostCount", "Count", "range", 0, 200, 1],
       ["ghostsInside", "Show ghosts inside the box", "toggle"],
@@ -317,7 +340,9 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
       raf = 0;
       try { await ensureFonts(); } catch (e) { $("loading").textContent = "Couldn't load a typeface. Reload the page to try again."; return; }
       ready = true;
-      $("preview").innerHTML = G.generate(P, fonts);
+      const stats = {};
+      $("preview").innerHTML = G.generate(P, fonts, { stats });
+      renderCheck(stats);
       syncScrub();
       clearTimeout(thumbTimer); thumbTimer = setTimeout(renderStrip, 220);
     });
@@ -433,7 +458,6 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
 
   let db = null, downloads = null;
   function exportGroup() {
-    const bgT = control(["exportBackground", "Include shirt colour in SVG", "toggle"]);
     const ta = el("textarea", { id: "paramsIn", rows: "4", placeholder: "Paste parameters JSON here", spellcheck: "false" });
     const apply = el("button", { text: "Apply pasted parameters", onclick: () => {
       try { P = Object.assign(clone(D), JSON.parse(ta.value)); syncControls(); schedule(); commit(); toast("Parameters applied"); ta.value = ""; }
@@ -454,7 +478,7 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
       catch (e) { toast("Couldn't save the preset (" + (e && e.code || "error") + ")."); }
       save.disabled = false;
     };
-    return [bgT, el("div", { class: "ctl" }, [el("label", { for: "paramsIn", text: "Load parameters" }), ta]), apply, presetBox];
+    return [el("div", { class: "ctl" }, [el("label", { for: "paramsIn", text: "Load parameters" }), ta]), apply, presetBox];
   }
 
   function buildPanel() {
@@ -477,6 +501,62 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
 
   // ---------------------------------------------------------------- export
   function exportSvg() { return G.generate(P, fonts, { forExport: true }); }
+
+  // ---------------------------------------------------------------- print check
+  function renderCheck(st) {
+    const box = $("check");
+    box.innerHTML = "";
+    box.appendChild(el("span", { class: "label", text: P.printSafe ? "Print check · safe mode" : "Print check" }));
+    const chip = (s, text, title) => box.appendChild(el("span", { class: "chip", "data-s": s, text, title }));
+    const grade = (v, ok, warn) => (v >= ok ? "ok" : v >= warn ? "warn" : "bad");
+    if (st.thinnestLine) chip(grade(st.thinnestLine.mm, 0.5, 0.35), "line " + st.thinnestLine.mm + " mm",
+      "Thinnest line: " + st.thinnestLine.what + ". Aim for 0.5 mm or more on a dark shirt.");
+    if (st.narrowestGap) chip(grade(st.narrowestGap.mm, 1, 0.75), "gap " + st.narrowestGap.mm + " mm",
+      "Narrowest gap: " + st.narrowestGap.what + ". Gaps under 1 mm can fill in.");
+    if (st.smallestSpeck) chip(grade(st.smallestSpeck.mm, 1, 0.6), "speck " + st.smallestSpeck.mm + " mm",
+      "Smallest grain speck. Under about 1 mm may not print.");
+    chip(st.transparentItems ? "warn" : "ok", st.transparentItems ? st.transparentItems + " see-through" : "no see-through",
+      st.transparentItems ? "See-through colours print unpredictably. Turn on Print-safe to flatten them." : "Every colour is solid.");
+    chip("ok", st.colours + " colours", "Distinct solid colours. Fine for DTG and DTF; screen printing wants 6 or fewer.");
+  }
+
+  // ---------------------------------------------------------------- PNG export (300 dpi)
+  const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  function crc32(bytes) { let c = 0xffffffff; for (const b of bytes) c = CRC[(c ^ b) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+  function withDpi(png, dpi) {  // insert a pHYs chunk right after IHDR
+    const ppm = Math.round(dpi / 0.0254), chunk = new Uint8Array(21), v = new DataView(chunk.buffer);
+    v.setUint32(0, 9); chunk.set([0x70, 0x48, 0x59, 0x73], 4); v.setUint32(8, ppm); v.setUint32(12, ppm); chunk[16] = 1;
+    v.setUint32(17, crc32(chunk.subarray(4, 17)));
+    const at = 33, out = new Uint8Array(png.length + 21);
+    out.set(png.subarray(0, at)); out.set(chunk, at); out.set(png.subarray(at), at + 21);
+    return out;
+  }
+  async function renderPng() {
+    const url = URL.createObjectURL(new Blob([exportSvg()], { type: "image/svg+xml" }));
+    try {
+      const img = new Image();
+      await new Promise((ok, fail) => { img.onload = ok; img.onerror = fail; img.src = url; });
+      const c = document.createElement("canvas"); c.width = 3600; c.height = 4800;
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      const blob = await new Promise((ok) => c.toBlob(ok, "image/png"));
+      return withDpi(new Uint8Array(await blob.arrayBuffer()), 300);
+    } finally { URL.revokeObjectURL(url); }
+  }
+  window.__renderPng = renderPng;  // used by the local test harness only
+  $("savePng").onclick = async () => {
+    if (!ready) return;
+    if (!downloads) { toast("Saving files isn't available here. Open the studio in claude.ai to save a PNG."); return; }
+    const btn = $("savePng"); btn.disabled = true; btn.textContent = "Rendering…";
+    try {
+      const png = await renderPng();
+      await downloads.save({ filename: "eleven-squares-3600x4800.png", data: png });
+      toast(P.printSafe ? "PNG saved" : "PNG saved. Print-safe is off, so check the print chips before ordering.");
+    } catch (e) {
+      if (!(e && e.code === "declined")) toast("Couldn't save the PNG (" + ((e && e.code) || "render error") + ").");
+    } finally { btn.disabled = false; btn.textContent = "Save PNG"; }
+  };
+
   $("saveSvg").onclick = async () => {
     if (!ready) return;
     const svg = exportSvg();

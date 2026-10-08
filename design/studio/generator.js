@@ -123,6 +123,12 @@
     grainSize: 2,
     grainColourChance: 0.4,
     exportBackground: false,
+
+    // print-safe mode: flattens transparency onto the shirt colour and enforces minimums (units: 1 = 0.254 mm)
+    printSafe: false,
+    minLine: 2.5,
+    minGap: 4,
+    minSpeck: 4,
   };
 
   // ------------------------------------------------------------- utilities
@@ -161,6 +167,11 @@
   function shade(hex, t) {  // t in [-1, 1]: towards black / white
     const c = hexToRgb(hex).map((v) => Math.round(t >= 0 ? v + (255 - v) * t : v * (1 + t)));
     return "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
+  }
+
+  function mix(bg, fg, a) {  // fg over bg at opacity a, as one solid colour
+    const B = hexToRgb(bg), F = hexToRgb(fg);
+    return "#" + B.map((v, i) => Math.round(v + (F[i] - v) * a).toString(16).padStart(2, "0")).join("");
   }
 
   // ------------------------------------------------------------- text → outlines
@@ -223,6 +234,17 @@
   }
 
   // ------------------------------------------------------------- main
+  const MM_PER_UNIT = 25.4 / 100;   // artboard is 12 in wide over 1200 units
+
+  // even-odd clip path: the whole canvas minus the given rects (rects must not overlap)
+  function holesClip(id, rects) {
+    let d = `M-${W},-${H}H${2 * W}V${2 * H}H-${W}Z`;
+    for (const [x, y, w, h] of rects) d += `M${f2(x)},${f2(y)}V${f2(y + h)}H${f2(x + w)}V${f2(y)}Z`;
+    return `<clipPath id="${id}"><path clip-rule="evenodd" d="${d}"/></clipPath>`;
+  }
+
+  /* generate(params, fonts, {forExport, stats}) -> SVG string.
+   * Pass `stats: {}` to receive a print report (sizes in mm). */
   function generate(params, fonts, opts) {
     const p = Object.assign({}, DEFAULTS, params || {});
     if (params && params.seed != null) {
@@ -230,10 +252,23 @@
     }
     if (params && params.ghostsThroughGaps === false && params.ghostsInside == null) p.ghostsInside = false;  // old name
     const forExport = !!(opts && opts.forExport);
+    const safe = !!p.printSafe;
     const out = [];
     const add = (s) => out.push(s);
     const S = PACKING.side;
     const A = p.packSize, X = (W - A) / 2 + p.packX, Y = p.packY;
+
+    // print bookkeeping
+    const st = { lines: [], gaps: [], specks: [], alpha: 0, colours: new Set() };
+    const line = (w, what) => st.lines.push([w, what]);
+    // in print-safe mode, transparency becomes the solid colour it looks like on the shirt
+    const paint = (c, op) => {
+      op = op == null ? 1 : +op;
+      if (safe && op < 1) c = mix(p.bg, c, op), op = 1;
+      if (op < 1) st.alpha++;
+      st.colours.add(c.toLowerCase());
+      return op < 1 ? [c, ` opacity="${op.toFixed(2)}"`] : [c, ""];
+    };
 
     add(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${W} ${H}"` +
         (forExport ? ` width="12in" height="16in"` : ` preserveAspectRatio="xMidYMid meet"`) + `>`);
@@ -241,112 +276,156 @@
     if (forExport) add(`<metadata id="params">${esc(JSON.stringify(p))}</metadata>`);
     if (!forExport || p.exportBackground) add(`<rect id="shirt" width="${W}" height="${H}" fill="${p.bg}"/>`);
 
-    // ghosts + their slips, optionally clipped to the area outside the container
-    const clipOut = !p.ghostsInside;
-    if (clipOut) {
-      const c = p.ghostClearance, bx = X - c, by = Y - c, bw = A + 2 * c;
-      add(`<clipPath id="sq-outside"><path clip-rule="evenodd" d="M-${W},-${H}H${2 * W}V${2 * H}H-${W}Z` +
-          `M${f2(bx)},${f2(by)}V${f2(by + bw)}H${f2(bx + bw)}V${f2(by)}Z"/></clipPath>`);
-      add(`<g clip-path="url(#sq-outside)">`);
-    }
-
-    // ghosts: rejected arrangements, each in the (larger) box it would need
-    add(`<g id="sq-ghosts" fill="none" stroke-linejoin="round">`);
+    // ---- ghosts: rejected arrangements, each in the (larger) box it would need
+    let nGhostLines = 0;
+    add(`<defs><g id="sq-ghosts" fill="none" stroke-linejoin="round">`);
     for (let k = 0; k < p.ghostCount; k++) {
       const g = ghostSquares(p, k);
-      add(`<g stroke="${g.colour}" stroke-width="${f2(g.width)}" opacity="${g.op.toFixed(2)}"` +
-          (g.dx ? ` transform="translate(${f2(g.dx)},0)"` : "") + `>`);
+      const w = safe ? Math.max(g.width, p.minLine) : g.width;
+      const [c, o] = paint(g.colour, g.op);
+      add(`<g stroke="${c}" stroke-width="${f2(w)}"${o}` + (g.dx ? ` transform="translate(${f2(g.dx)},0)"` : "") + `>`);
       g.sq.forEach((q, i) => {
         const tilted = i < PACKING.tilted;
         if (p.ghostWhich === "tilted" && !tilted) return;
         if (p.ghostWhich === "axis" && tilted) return;
         add(`<path d="${polyD(toPx(q, X, Y, A, S))}"/>`);
+        nGhostLines++;
       });
       if (g.box) {
         const d = (A * (g.f - 1)) / 2;
         add(`<rect x="${f2(X - d)}" y="${f2(Y - d)}" width="${f2(A * g.f)}" height="${f2(A * g.f)}"/>`);
+        nGhostLines++;
       }
       add(`</g>`);
+      line(w, "ghost lines");
     }
-    add(`</g>`);
+    add(`</g></defs>`);
 
-    // tracking slips on the ghost layer only
+    // tracking slips: bands of the ghost layer cut out (real holes) and redrawn shifted
+    const bands = [];
     if (p.ghostCount > 0 && p.sliceChance > 0) {
       const r = stream(p.seedSlices, 7);
-      let y = Y - p.sliceReach, n = 0;
+      let y = Y - p.sliceReach;
       while (y < Y + A + p.sliceReach) {
         const h = r.uniform(p.sliceHeightMin, Math.max(p.sliceHeightMin, p.sliceHeightMax));
-        if (r.next() < p.sliceChance) {
-          const id = `sq-gs${n++}`, dx = r.uniform(-p.sliceShift, p.sliceShift);
-          add(`<clipPath id="${id}"><rect x="0" y="${f2(y)}" width="${W}" height="${h}"/></clipPath>`);
-          add(`<g clip-path="url(#${id})"><rect x="0" y="${f2(y)}" width="${W}" height="${h}" fill="${p.bg}"/>` +
-              `<use href="#sq-ghosts" xlink:href="#sq-ghosts" transform="translate(${f2(dx)},0)"/></g>`);
-        }
+        if (r.next() < p.sliceChance) bands.push([y, h, r.uniform(-p.sliceShift, p.sliceShift)]);
         y += h + r.uniform(p.sliceGapMin, Math.max(p.sliceGapMin, p.sliceGapMax));
       }
     }
+    if (nGhostLines) {
+      if (!p.ghostsInside) {
+        const c = p.ghostClearance;
+        add(holesClip("sq-outside", [[X - c, Y - c, A + 2 * c, A + 2 * c]]));
+        add(`<g clip-path="url(#sq-outside)">`);
+      }
+      if (bands.length) {
+        add(holesClip("sq-gkeep", bands.map(([y, h]) => [-W, y, 3 * W, h])));
+        add(`<g clip-path="url(#sq-gkeep)"><use href="#sq-ghosts" xlink:href="#sq-ghosts"/></g>`);
+        bands.forEach(([y, h, dx], i) => {
+          add(`<clipPath id="sq-gs${i}"><rect x="${-W}" y="${f2(y)}" width="${3 * W}" height="${f2(h)}"/></clipPath>`);
+          add(`<g clip-path="url(#sq-gs${i})"><use href="#sq-ghosts" xlink:href="#sq-ghosts" transform="translate(${f2(dx)},0)"/></g>`);
+        });
+      } else {
+        add(`<use href="#sq-ghosts" xlink:href="#sq-ghosts"/>`);
+      }
+      if (!p.ghostsInside) add(`</g>`);
+    }
 
-    if (clipOut) add(`</g>`);
-
-    // the packing, clean
+    // ---- the packing, clean. Gaps are real gaps: each square is shrunk, not stroked.
     const rs = stream(p.seedShade, 3);
+    const unitPx = A / S;
+    const gap = safe && p.squareStyle !== "outline" ? Math.max(p.gap, p.minGap) : p.gap;
     PACKING.squares.forEach((q, i) => {
       const tilted = i < PACKING.tilted;
       const t = rs.next() * 2 - 1;
       const fill = tilted ? shade(p.tiltFill, t * p.tiltShade) : shade(p.axisFill, t * p.axisShade);
-      const d = polyD(toPx(q, X, Y, A, S));
+      const pts = toPx(q, X, Y, A, S);
+      st.colours.add(fill);
       if (p.squareStyle === "outline") {
-        add(`<path d="${d}" fill="none" stroke="${fill}" stroke-width="${f2(Math.max(p.gap, 1))}" stroke-linejoin="round"/>`);
+        const w = Math.max(p.gap, 1, safe ? p.minLine : 0);
+        add(`<path d="${polyD(pts)}" fill="none" stroke="${fill}" stroke-width="${f2(w)}" stroke-linejoin="round"/>`);
+        line(w, "square outlines");
       } else {
-        add(`<path d="${d}" fill="${fill}"` + (p.gap > 0 ? ` stroke="${p.bg}" stroke-width="${f2(p.gap)}" stroke-linejoin="round"` : "") + `/>`);
+        const k = Math.max(0, 1 - gap / unitPx);
+        const cx = pts.reduce((s, v) => s + v[0], 0) / 4, cy = pts.reduce((s, v) => s + v[1], 0) / 4;
+        add(`<path d="${polyD(pts.map(([a, b]) => [cx + (a - cx) * k, cy + (b - cy) * k]))}" fill="${fill}"/>`);
       }
     });
+    if (p.squareStyle !== "outline" && gap > 0) st.gaps.push([gap, "gaps between squares"]);
     if (p.outline) {
-      add(`<rect x="${f2(X)}" y="${f2(Y)}" width="${A}" height="${A}" fill="none" stroke="${p.outlineColor}" stroke-width="${f2(p.outlineWidth)}"/>`);
+      const w = safe ? Math.max(p.outlineWidth, p.minLine) : p.outlineWidth;
+      st.colours.add(p.outlineColor.toLowerCase());
+      add(`<rect x="${f2(X)}" y="${f2(Y)}" width="${A}" height="${A}" fill="none" stroke="${p.outlineColor}" stroke-width="${f2(w)}"/>`);
+      line(w, "container outline");
     }
 
-    // headline: RGB split + tracking slips
+    // ---- headline: RGB split + tracking slips (slips are real cut-outs)
     if (p.headText) {
       const d = textPath(p.headText, p.headFont, p.headSize, W / 2 + p.headX, p.headY, p.headTracking, fonts);
       const sa = p.splitAmount;
-      const so = p.splitOpacity.toFixed(2);
+      const [ca, oa] = paint(p.splitA, p.splitOpacity);
+      const [cb, ob] = sa ? paint(p.splitB, p.splitOpacity) : [p.splitB, ""];
+      st.colours.add(p.headColor.toLowerCase());
+      const word = (dx, splitDx) =>
+        (sa ? `<path d="${d}" fill="${ca}"${oa} transform="translate(${f2(dx - (splitDx == null ? sa : -splitDx))},0)"/>` : "") +
+        (sa && splitDx == null ? `<path d="${d}" fill="${cb}"${ob} transform="translate(${f2(dx + sa)},0)"/>` : "") +
+        `<path d="${d}" fill="${p.headColor}"${dx ? ` transform="translate(${f2(dx)},0)"` : ""}/>`;
+      const slips = [[p.headSlicePos, p.headSliceHeight, p.headSliceShift]];
+      if (p.headSlice2) slips.push([p.headSlice2Pos, p.headSlice2Height, p.headSlice2Shift]);
+      const live = slips.filter(([, hh, dx]) => hh && dx)
+        .map(([pos, hh, dx]) => [p.headY - pos * p.headSize, hh * p.headSize, dx]);
       add(`<g id="sq-head">`);
-      if (sa) {
-        add(`<path d="${d}" fill="${p.splitA}" opacity="${so}" transform="translate(${f2(-sa)},0)"/>`);
-        add(`<path d="${d}" fill="${p.splitB}" opacity="${so}" transform="translate(${f2(sa)},0)"/>`);
-      }
-      add(`<path d="${d}" fill="${p.headColor}"/>`);
-      const slices = [[p.headSlicePos, p.headSliceHeight, p.headSliceShift]];
-      if (p.headSlice2) slices.push([p.headSlice2Pos, p.headSlice2Height, p.headSlice2Shift]);
-      slices.forEach(([pos, hh, dx], i) => {
-        if (!hh || !dx) return;
-        const sy = p.headY - pos * p.headSize, sh = hh * p.headSize, id = `sq-hs${i}`;
-        add(`<clipPath id="${id}"><rect x="0" y="${f2(sy)}" width="${W}" height="${f2(sh)}"/></clipPath>`);
-        add(`<g clip-path="url(#${id})"><rect x="0" y="${f2(sy)}" width="${W}" height="${f2(sh)}" fill="${p.bg}"/>`);
-        if (sa) add(`<path d="${d}" fill="${p.splitA}" opacity="${so}" transform="translate(${f2(dx + Math.sign(dx) * sa * 1.6)},0)"/>`);
-        add(`<path d="${d}" fill="${p.headColor}" transform="translate(${f2(dx)},0)"/></g>`);
+      // nest one single-hole clip per slip so overlapping slips still cut cleanly
+      live.forEach(([y, h], i) => {
+        add(holesClip(`sq-hk${i}`, [[-W, y, 3 * W, h]]));
+        add(`<g clip-path="url(#sq-hk${i})">`);
+      });
+      add(word(0));
+      live.forEach(() => add(`</g>`));
+      live.forEach(([y, h, dx], i) => {
+        add(`<clipPath id="sq-hs${i}"><rect x="${-W}" y="${f2(y)}" width="${3 * W}" height="${f2(h)}"/></clipPath>`);
+        add(`<g clip-path="url(#sq-hs${i})">${word(dx, Math.sign(dx) * sa * 1.6)}</g>`);
       });
       add(`</g>`);
     }
 
     if (p.subText) {
-      add(`<path d="${textPath(p.subText, p.subFont, p.subSize, W / 2 + p.subX, p.subY, p.subTracking, fonts)}" fill="${p.subColor}" opacity="${p.subOpacity}"/>`);
+      const [c, o] = paint(p.subColor, p.subOpacity);
+      add(`<path d="${textPath(p.subText, p.subFont, p.subSize, W / 2 + p.subX, p.subY, p.subTracking, fonts)}" fill="${c}"${o}/>`);
     }
     if (p.grainCount > 0) {
       const r = stream(p.seedGrain, 9);
+      let smallest = Infinity;
       add(`<g id="sq-grain">`);
       for (let i = 0; i < p.grainCount; i++) {
-        const s = f2(p.grainSize * r.uniform(0.6, 1.5));
-        const c = r.next() < p.grainColourChance ? r.choice(p.palette) : p.ink;
-        add(`<rect x="${f2(r.uniform(0, W))}" y="${f2(r.uniform(0, H))}" width="${s}" height="${s}" fill="${c}" opacity="${r.uniform(0.1, p.grainOpacityMax).toFixed(2)}"/>`);
+        let s = p.grainSize * r.uniform(0.6, 1.5);
+        if (safe) s = Math.max(s, p.minSpeck);
+        smallest = Math.min(smallest, s);
+        const c0 = r.next() < p.grainColourChance ? r.choice(p.palette) : p.ink;
+        const x = r.uniform(0, W), y = r.uniform(0, H);
+        const [c, o] = paint(c0, r.uniform(0.1, p.grainOpacityMax));
+        add(`<rect x="${f2(x)}" y="${f2(y)}" width="${f2(s)}" height="${f2(s)}" fill="${c}"${o}/>`);
       }
       add(`</g>`);
+      st.specks.push([smallest, "grain specks"]);
     }
     add(`</svg>`);
+
+    if (opts && opts.stats) {
+      const min = (arr) => arr.reduce((m, v) => (v[0] < m[0] ? v : m), [Infinity, ""]);
+      const mm = ([v, what]) => (isFinite(v) ? { mm: +(v * MM_PER_UNIT).toFixed(2), what } : null);
+      Object.assign(opts.stats, {
+        thinnestLine: mm(min(st.lines)),
+        narrowestGap: mm(min(st.gaps)),
+        smallestSpeck: mm(min(st.specks)),
+        transparentItems: st.alpha,
+        colours: st.colours.size,
+      });
+    }
     return out.join("\n");
   }
 
-  const api = { W, H, PACKING, FONTS, FALLBACK_FONT, DEFAULTS, generate };
+  const api = { W, H, PACKING, FONTS, FALLBACK_FONT, DEFAULTS, MM_PER_UNIT, generate };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.SquaresGen = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
